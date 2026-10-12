@@ -348,6 +348,23 @@ isSosMode
                           ).workaroundFreezeLinuxMint(),
                         ),
                       ),
+                      if (showOneTime)
+                        AnimatedRotationWidget(
+                          onPressed: () => bind.mainUpdateTemporaryPassword(),
+                          child: Tooltip(
+                            message: translate('Refresh Password'),
+                            child: Obx(() => RotatedBox(
+                                quarterTurns: 2,
+                                child: Icon(
+                                  Icons.refresh,
+                                  color: refreshHover.value
+                                      ? textColor
+                                      : Color(0xFFDDDDDD),
+                                  size: 22,
+                                ))),
+                          ),
+                          onHover: (value) => refreshHover.value = value,
+                        ).marginOnly(right: 8, top: 4),
                     ],
                   ),
                 ],
