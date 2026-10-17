@@ -1,929 +1,813 @@
 import 'dart:async';
-
+import 'dart:math';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_hbb/desktop/pages/desktop_home_page.dart';
-import 'package:flutter_hbb/mobile/widgets/dialog.dart';
-import 'package:flutter_hbb/models/chat_model.dart';
-import 'package:get/get.dart';
-import 'package:provider/provider.dart';
-
-import '../../common.dart';
-import '../../common/widgets/dialog.dart';
+import 'package:flutter_hbb/common.dart';
+import 'package:flutter_hbb/common/widgets/dialog.dart';
+import 'package:flutter_hbb/models/input_modifier_utils.dart';
+import 'package:flutter_hbb/models/model.dart';
+import 'package:flutter_hbb/models/platform_model.dart';
+import 'package:flutter_hbb/models/terminal_copy_shortcut.dart';
+import 'package:flutter_hbb/models/terminal_model.dart';
+import 'package:flutter_hbb/models/terminal_mouse_handler.dart';
+import 'package:flutter_hbb/mobile/terminal_keyboard_utils.dart';
+import 'package:flutter_hbb/web/dummy.dart'
+    if (dart.library.html) 'package:flutter_hbb/web/terminal_font.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:xterm/xterm.dart';
+import '../../desktop/pages/terminal_connection_manager.dart';
 import '../../consts.dart';
-import '../../models/platform_model.dart';
-import '../../models/server_model.dart';
-import 'home_page.dart';
 
-class ServerPage extends StatefulWidget implements PageShape {
-  @override
-  final title = translate("Share screen");
+const _terminalBackgroundOpacity = 0.7;
 
-  @override
-  final icon = const Icon(Icons.mobile_screen_share);
-
-  @override
-  final appBarActions = (!bind.isDisableSettings() &&
-          bind.mainGetBuildinOption(key: kOptionHideSecuritySetting) != 'Y')
-      ? [_DropDownAction()]
-      : [];
-
-  ServerPage({Key? key}) : super(key: key);
-
-  @override
-  State<StatefulWidget> createState() => _ServerPageState();
-}
-
-class _DropDownAction extends StatelessWidget {
-  _DropDownAction();
-
-  // should only have one action
-  final actions = [
-    PopupMenuButton<String>(
-        tooltip: "",
-        icon: const Icon(Icons.more_vert),
-        itemBuilder: (context) {
-          listTile(String text, bool checked) {
-            return ListTile(
-                title: Text(translate(text)),
-                trailing: Icon(
-                  Icons.check,
-                  color: checked ? null : Colors.transparent,
-                ));
-          }
-
-          final approveMode = gFFI.serverModel.approveMode;
-          final verificationMethod = gFFI.serverModel.verificationMethod;
-          final showPasswordOption = approveMode != 'click';
-          final isApproveModeFixed = isOptionFixed(kOptionApproveMode);
-          final isNumericOneTimePasswordFixed =
-              isOptionFixed(kOptionAllowNumericOneTimePassword);
-          final isAllowNumericOneTimePassword =
-              gFFI.serverModel.allowNumericOneTimePassword;
-          return [
-            if (!isChangeIdDisabled())
-              PopupMenuItem(
-                enabled: gFFI.serverModel.connectStatus > 0,
-                value: "changeID",
-                child: Text(translate("Change ID")),
-              ),
-            if (!isChangeIdDisabled()) const PopupMenuDivider(),
-            PopupMenuItem(
-              value: 'AcceptSessionsViaPassword',
-              child: listTile(
-                  'Accept sessions via password', approveMode == 'password'),
-              enabled: !isApproveModeFixed,
-            ),
-            PopupMenuItem(
-              value: 'AcceptSessionsViaClick',
-              child:
-                  listTile('Accept sessions via click', approveMode == 'click'),
-              enabled: !isApproveModeFixed,
-            ),
-            PopupMenuItem(
-              value: "AcceptSessionsViaBoth",
-              child: listTile("Accept sessions via both",
-                  approveMode != 'password' && approveMode != 'click'),
-              enabled: !isApproveModeFixed,
-            ),
-            if (showPasswordOption) const PopupMenuDivider(),
-            if (showPasswordOption &&
-                verificationMethod != kUseTemporaryPassword &&
-                !isChangePermanentPasswordDisabled())
-              PopupMenuItem(
-                value: "setPermanentPassword",
-                child: Text(translate("Set permanent password")),
-              ),
-            if (showPasswordOption &&
-                verificationMethod != kUsePermanentPassword)
-              PopupMenuItem(
-                value: "setTemporaryPasswordLength",
-                child: Text(translate("One-time password length")),
-              ),
-            if (showPasswordOption &&
-                verificationMethod != kUsePermanentPassword)
-              PopupMenuItem(
-                value: "allowNumericOneTimePassword",
-                child: listTile(translate("Numeric one-time password"),
-                    isAllowNumericOneTimePassword),
-                enabled: !isNumericOneTimePasswordFixed,
-              ),
-            if (showPasswordOption) const PopupMenuDivider(),
-            if (showPasswordOption)
-              PopupMenuItem(
-                value: kUseTemporaryPassword,
-                child: listTile('Use one-time password',
-                    verificationMethod == kUseTemporaryPassword),
-              ),
-            if (showPasswordOption)
-              PopupMenuItem(
-                value: kUsePermanentPassword,
-                child: listTile('Use permanent password',
-                    verificationMethod == kUsePermanentPassword),
-              ),
-            if (showPasswordOption)
-              PopupMenuItem(
-                value: kUseBothPasswords,
-                child: listTile(
-                    'Use both passwords',
-                    verificationMethod != kUseTemporaryPassword &&
-                        verificationMethod != kUsePermanentPassword),
-              ),
-          ];
-        },
-        onSelected: (value) async {
-          if (value == "changeID") {
-            changeIdDialog();
-          } else if (value == "setPermanentPassword") {
-            setPasswordDialog();
-          } else if (value == "setTemporaryPasswordLength") {
-            setTemporaryPasswordLengthDialog(gFFI.dialogManager);
-          } else if (value == "allowNumericOneTimePassword") {
-            gFFI.serverModel.switchAllowNumericOneTimePassword();
-            gFFI.serverModel.updatePasswordModel();
-          } else if (value == kUsePermanentPassword ||
-              value == kUseTemporaryPassword ||
-              value == kUseBothPasswords) {
-            callback() {
-              bind.mainSetOption(key: kOptionVerificationMethod, value: value);
-              gFFI.serverModel.updatePasswordModel();
-            }
-
-            if (value == kUsePermanentPassword &&
-                (await bind.mainGetCommon(key: "permanent-password-set")) !=
-                    "true") {
-              if (isChangePermanentPasswordDisabled()) {
-                callback();
-                return;
-              }
-              setPasswordDialog(notEmptyCallback: callback);
-            } else {
-              callback();
-            }
-          } else if (value.startsWith("AcceptSessionsVia")) {
-            value = value.substring("AcceptSessionsVia".length);
-            if (value == "Password") {
-              gFFI.serverModel.setApproveMode('password');
-            } else if (value == "Click") {
-              gFFI.serverModel.setApproveMode('click');
-            } else {
-              gFFI.serverModel.setApproveMode(defaultOptionApproveMode);
-            }
-          }
-        })
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return actions[0];
+Widget _buildTerminalViewForPlatform({
+  required bool reportMouseInput,
+  required bool reportTouchInput,
+  required Terminal terminal,
+  required TerminalController controller,
+  required TerminalStyle textStyle,
+  required EdgeInsets padding,
+  required bool deleteDetection,
+  required Map<ShortcutActivator, Intent>? shortcuts,
+  required FocusOnKeyEventCallback onKeyEvent,
+  required void Function(TapDownDetails, CellOffset) onSecondaryTapDown,
+}) {
+  if (reportMouseInput || reportTouchInput) {
+    return TerminalMouseInteraction(
+      terminal,
+      controller: controller,
+      autofocus: true,
+      textStyle: textStyle,
+      deleteDetection: deleteDetection,
+      reportTouchInput: reportTouchInput,
+      shortcuts: shortcuts,
+      onKeyEvent: onKeyEvent,
+      backgroundOpacity: _terminalBackgroundOpacity,
+      padding: padding,
+      onSecondaryTapDown: onSecondaryTapDown,
+    );
   }
+  return TerminalView(
+    terminal,
+    controller: controller,
+    autofocus: true,
+    textStyle: textStyle,
+    deleteDetection: deleteDetection,
+    shortcuts: shortcuts,
+    onKeyEvent: onKeyEvent,
+    backgroundOpacity: _terminalBackgroundOpacity,
+    padding: padding,
+    onSecondaryTapDown: onSecondaryTapDown,
+  );
 }
 
-class _ServerPageState extends State<ServerPage> {
-  Timer? _updateTimer;
+class TerminalPage extends StatefulWidget {
+  const TerminalPage({
+    Key? key,
+    required this.id,
+    required this.password,
+    required this.isSharedPassword,
+    this.forceRelay,
+    this.connToken,
+  }) : super(key: key);
+  final String id;
+  final String? password;
+  final bool? forceRelay;
+  final bool? isSharedPassword;
+  final String? connToken;
+  final terminalId = 0;
+
+  @override
+  State<TerminalPage> createState() => _TerminalPageState();
+}
+
+class _TerminalPageState extends State<TerminalPage>
+    with AutomaticKeepAliveClientMixin, WidgetsBindingObserver {
+  bool get _canConfigureTerminalClipboardPermission =>
+      canConfigureTerminalClipboardPermission(
+        settingsDisabled: bind.isDisableSettings(),
+        optionFixed: isOptionFixed(kOptionAllowTerminalClipboardWrite),
+      );
+  bool get _canHandleTerminalClipboardWriteRequest =>
+      canHandleTerminalClipboardWriteRequest(
+        localOption: bind.mainGetLocalOption(
+          key: kOptionAllowTerminalClipboardWrite,
+        ),
+        canConfigurePermission: _canConfigureTerminalClipboardPermission,
+      );
+
+  late FFI _ffi;
+  late TerminalModel _terminalModel;
+  double? _cellHeight;
+  double _sysKeyboardHeight = 0;
+  Timer? _keyboardDebounce;
+  final GlobalKey _keyboardKey = GlobalKey();
+  double _keyboardHeight = 0;
+  late bool _showTerminalExtraKeys;
+  // Ctrl lock state for virtual keyboard: active key presses are mapped to control codes
+  bool _ctrlLocked = false;
+  bool _altLocked = false;
+  // Row3 expand/collapse state for compact keyboard layout
+  bool _row3Expanded = false;
+  // For iOS edge swipe gesture
+  double _swipeStartX = 0;
+  double _swipeCurrentX = 0;
+  ScaffoldFeatureController<MaterialBanner, MaterialBannerClosedReason>?
+      _terminalClipboardNoticeController;
+  final _terminalClipboardNotice = TerminalClipboardNoticeCoordinator<int>();
+
+  // For web only.
+  // 'monospace' does not work on web, use Google Fonts, `??` is only for null safety.
+  final String _robotoMonoFontFamily = isWeb
+      ? (GoogleFonts.robotoMono().fontFamily ?? 'monospace')
+      : 'monospace';
+
+  SessionID get sessionId => _ffi.sessionId;
 
   @override
   void initState() {
     super.initState();
-    _updateTimer = periodic_immediate(const Duration(seconds: 3), () async {
-      await gFFI.serverModel.fetchID();
+    WidgetsBinding.instance.addObserver(this);
+
+    if (isWeb) {
+      loadLocalTerminalFontIfNeeded();
+    }
+
+    debugPrint(
+        '[TerminalPage] Initializing terminal ${widget.terminalId} for peer ${widget.id}');
+
+    // Use shared FFI instance from connection manager
+    _ffi = TerminalConnectionManager.getConnection(
+      peerId: widget.id,
+      password: widget.password,
+      isSharedPassword: widget.isSharedPassword,
+      forceRelay: widget.forceRelay,
+      connToken: widget.connToken,
+    );
+
+    // Create terminal model with specific terminal ID
+    _terminalModel = TerminalModel(_ffi, widget.terminalId);
+    if (_canHandleTerminalClipboardWriteRequest) {
+      _terminalModel.onClipboardWriteBlocked =
+          _handleTerminalClipboardWriteBlocked;
+      _terminalModel.onClipboardWriteSucceeded =
+          _handleTerminalClipboardWriteSucceeded;
+    }
+    debugPrint(
+        '[TerminalPage] Terminal model created for terminal ${widget.terminalId}');
+
+    _terminalModel.onResizeExternal = (w, h, pw, ph) {
+      _cellHeight = ph * 1.0;
+    };
+
+    // Register this terminal model with FFI for event routing
+    _ffi.registerTerminalModel(widget.terminalId, _terminalModel);
+
+    // Auto-close connection when shell exits
+    _terminalModel.onClosed = () {
+      if (mounted) {
+        closeConnection(id: widget.id);
+      }
+    };
+
+    // Web desktop users have full hardware keyboard access, so the on-screen
+    // terminal extra keys bar is unnecessary and disabled.
+    _showTerminalExtraKeys = !isWebDesktop &&
+        mainGetLocalBoolOptionSync(kOptionEnableShowTerminalExtraKeys);
+    _terminalModel.isCtrlLocked = () => _ctrlLocked;
+    _terminalModel.clearCtrlLock = () {
+      if (_ctrlLocked) setState(() => _ctrlLocked = false);
+    };
+    _terminalModel.isAltLocked = () => _altLocked;
+    _terminalModel.clearAltLock = () {
+      if (_altLocked) setState(() => _altLocked = false);
+    };
+    // Load Row3 expand/collapse state from persistent storage. The raw option
+    // read keeps Row3 collapsed when no value has been saved yet.
+    _row3Expanded =
+        bind.mainGetLocalOption(key: kOptionShowTerminalCtrlKeys) == 'Y';
+    // Initialize terminal connection
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _ffi.dialogManager
+          .showLoading(translate('Connecting...'), onCancel: closeConnection);
+
+      if (_showTerminalExtraKeys) {
+        _updateKeyboardHeight();
+      }
     });
-    gFFI.serverModel.checkAndroidPermission();
+    _ffi.ffiModel.updateEventListener(_ffi.sessionId, widget.id);
+  }
+
+  void _handleTerminalClipboardWriteBlocked(String clipboardText) {
+    if (!mounted) return;
+    final option = bind.mainGetLocalOption(
+      key: kOptionAllowTerminalClipboardWrite,
+    );
+    final request = _terminalClipboardNotice.recordBlocked(
+      source: widget.terminalId,
+      text: clipboardText,
+      option: option,
+      canWrite: (_) => _canWriteTerminalClipboard,
+    );
+    if (request != null) _showTerminalClipboardNotice(request);
+  }
+
+  void _showTerminalClipboardNotice(
+    TerminalClipboardNoticeRequest<int> request,
+  ) {
+    final controller = ScaffoldMessenger.of(context).showMaterialBanner(
+      MaterialBanner(
+        leading: const Icon(Icons.content_copy_outlined),
+        content: Text(translate(kTerminalClipboardNoticeMessageKey)),
+        actions: [
+          AnimatedBuilder(
+            animation: _terminalClipboardNotice,
+            builder: (_, __) => TextButton(
+              onPressed: _terminalClipboardNotice.canClaimAction
+                  ? _handleTerminalClipboardNegativeAction
+                  : null,
+              child: Text(translate(request.negativeActionKey)),
+            ),
+          ),
+          AnimatedBuilder(
+            animation: _terminalClipboardNotice,
+            builder: (_, __) => TextButton(
+              onPressed: _terminalClipboardNotice.canClaimAction
+                  ? _handleTerminalClipboardPositiveAction
+                  : null,
+              child: Text(translate(request.actionKey)),
+            ),
+          ),
+        ],
+      ),
+    );
+    _terminalClipboardNoticeController = controller;
+    unawaited(controller.closed.then<void>((_) {
+      if (identical(_terminalClipboardNoticeController, controller)) {
+        _terminalClipboardNoticeController = null;
+        _terminalClipboardNotice.noticeClosed();
+      }
+    }));
+  }
+
+  void _handleTerminalClipboardNegativeAction() {
+    final request = _terminalClipboardNotice.claimCurrentAction();
+    if (request == null) return;
+    if (request.persistAllowed) {
+      unawaited(_declineTerminalClipboardWrite());
+    } else {
+      _closeTerminalClipboardNotice();
+    }
+  }
+
+  void _handleTerminalClipboardPositiveAction() {
+    final request = _terminalClipboardNotice.claimCurrentAction();
+    if (request == null) return;
+    unawaited(_completeTerminalClipboardWrite(request));
+  }
+
+  bool get _canWriteTerminalClipboard =>
+      _canHandleTerminalClipboardWriteRequest &&
+      !_ffi.closed &&
+      _ffi.ffiModel.permissions['clipboard'] != false;
+
+  void _handleTerminalClipboardWriteSucceeded(String _) {
+    _closeTerminalClipboardNotice();
+  }
+
+  Future<void> _declineTerminalClipboardWrite() async {
+    try {
+      await bind.mainSetLocalOption(
+        key: kOptionAllowTerminalClipboardWrite,
+        value: kTerminalClipboardWriteDenied,
+      );
+    } catch (error) {
+      debugPrint(
+          '[TerminalPage] Failed to save terminal clipboard permission: $error');
+      return;
+    } finally {
+      _terminalClipboardNotice.releaseAction();
+    }
+    _closeTerminalClipboardNotice();
+  }
+
+  Future<void> _completeTerminalClipboardWrite(
+    TerminalClipboardNoticeRequest<int> request,
+  ) async {
+    var completed = false;
+    try {
+      completed = await completeTerminalClipboardWrite(
+        clipboardText: request.text,
+        canWrite: () => _canWriteTerminalClipboard,
+        writeClipboard: writeTerminalClipboard,
+        persistAllowed: request.persistAllowed
+            ? () => bind.mainSetLocalOption(
+                  key: kOptionAllowTerminalClipboardWrite,
+                  value: kTerminalClipboardWriteAllowed,
+                )
+            : null,
+      );
+    } catch (error) {
+      debugPrint(
+          '[TerminalPage] Failed to complete terminal clipboard write: $error');
+    } finally {
+      _terminalClipboardNotice.releaseAction();
+    }
+    if (!completed) return;
+    _closeTerminalClipboardNotice();
+  }
+
+  void _closeTerminalClipboardNotice() {
+    if (!_terminalClipboardNotice.beginClose()) return;
+    final controller = _terminalClipboardNoticeController;
+    if (controller == null) {
+      debugPrint('[TerminalPage] Clipboard notice controller is missing');
+      _terminalClipboardNotice.noticeClosed();
+      return;
+    }
+    controller.close();
   }
 
   @override
   void dispose() {
-    _updateTimer?.cancel();
+    // Unregister terminal model from FFI
+    _ffi.unregisterTerminalModel(widget.terminalId);
+    _terminalModel.dispose();
+    _keyboardDebounce?.cancel();
+    _terminalClipboardNotice.clear();
+    _terminalClipboardNoticeController?.close();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+    TerminalConnectionManager.releaseConnection(widget.id);
   }
 
   @override
-  Widget build(BuildContext context) {
-    checkService();
-    return ChangeNotifierProvider.value(
-        value: gFFI.serverModel,
-        child: Consumer<ServerModel>(
-            builder: (context, serverModel, child) => SingleChildScrollView(
-                  controller: gFFI.serverModel.controller,
-                  child: Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.start,
-                      children: [
-                        buildPresetPasswordWarningMobile(),
-                        gFFI.serverModel.isStart
-                            ? ServerInfo()
-                            : ServiceNotRunningNotification(),
-                        const ConnectionManager(),
-                        const PermissionChecker(),
-                        SizedBox.fromSize(size: const Size(0, 15.0)),
-                      ],
-                    ),
-                  ),
-                )));
-  }
-}
+  void didChangeMetrics() {
+    super.didChangeMetrics();
 
-void checkService() async {
-  gFFI.invokeMethod("check_service");
-}
-
-class ServiceNotRunningNotification extends StatelessWidget {
-  ServiceNotRunningNotification({Key? key}) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    final serverModel = Provider.of<ServerModel>(context);
-
-    return PaddingCard(
-        title: translate("Service is not running"),
-        titleIcon:
-            const Icon(Icons.warning_amber_sharp, color: Colors.redAccent),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(translate("android_start_service_tip"),
-                    style:
-                        const TextStyle(fontSize: 12, color: MyTheme.darkGray))
-                .marginOnly(bottom: 8),
-            ElevatedButton.icon(
-                icon: const Icon(Icons.play_arrow),
-                onPressed: () {
-                  if (gFFI.userModel.userName.value.isEmpty &&
-                      bind.mainGetLocalOption(key: "show-scam-warning") !=
-                          "N") {
-                    showScamWarning(context, serverModel);
-                  } else {
-                    serverModel.toggleService();
-                  }
-                },
-                label: Text(translate("Start service")))
-          ],
-        ));
-  }
-}
-
-class ScamWarningDialog extends StatefulWidget {
-  final ServerModel serverModel;
-
-  ScamWarningDialog({required this.serverModel});
-
-  @override
-  ScamWarningDialogState createState() => ScamWarningDialogState();
-}
-
-class ScamWarningDialogState extends State<ScamWarningDialog> {
-  int _countdown = bind.isCustomClient() ? 0 : 12;
-  bool show_warning = false;
-  late Timer _timer;
-  late ServerModel _serverModel;
-
-  @override
-  void initState() {
-    super.initState();
-    _serverModel = widget.serverModel;
-    startCountdown();
-  }
-
-  void startCountdown() {
-    const oneSecond = Duration(seconds: 1);
-    _timer = Timer.periodic(oneSecond, (timer) {
+    _keyboardDebounce?.cancel();
+    _keyboardDebounce = Timer(const Duration(milliseconds: 20), () {
+      final bottomInset = MediaQuery.of(context).viewInsets.bottom;
       setState(() {
-        _countdown--;
-        if (_countdown <= 0) {
-          timer.cancel();
-        }
+        _sysKeyboardHeight = bottomInset;
       });
     });
   }
 
-  @override
-  void dispose() {
-    _timer.cancel();
-    super.dispose();
+  void _updateKeyboardHeight() {
+    if (_keyboardKey.currentContext != null) {
+      final renderBox = _keyboardKey.currentContext!.findRenderObject() as RenderBox;
+      _keyboardHeight = renderBox.size.height;
+    }
+  }
+
+  EdgeInsets _calculatePadding(double heightPx) {
+    if (_cellHeight == null) {
+      return const EdgeInsets.symmetric(horizontal: 5.0, vertical: 2.0);
+    }
+    final realHeight = heightPx - _sysKeyboardHeight - _keyboardHeight;
+    final rows = (realHeight / _cellHeight!).floor();
+    final extraSpace = realHeight - rows * _cellHeight!;
+    final topBottom = max(0.0, extraSpace / 2.0);
+    return EdgeInsets.only(left: 5.0, right: 5.0, top: topBottom, bottom: topBottom + _sysKeyboardHeight + _keyboardHeight);
+  }
+
+  /// Pastes clipboard text through TerminalModel so keyboard-only modifiers and
+  /// mobile Enter normalization never alter clipboard data.
+  Future<void> _pasteClipboardText() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text;
+    if (text == null || !mounted) return;
+
+    await _terminalModel.pasteText(text);
+    if (mounted) {
+      _terminalModel.terminalController.clearSelection();
+    }
+  }
+
+  KeyEventResult _handleTerminalKeyEvent(FocusNode _, KeyEvent event) {
+    final hardwareKeyboard = HardwareKeyboard.instance;
+    final shouldPaste = shouldHandleTerminalPasteShortcut(
+      platform: defaultTargetPlatform,
+      logicalKey: event.logicalKey,
+      isKeyDown: event is KeyDownEvent,
+      isKeyRepeat: event is KeyRepeatEvent,
+      controlPressed: hardwareKeyboard.isControlPressed,
+      metaPressed: hardwareKeyboard.isMetaPressed,
+      altPressed: hardwareKeyboard.isAltPressed,
+      shiftPressed: hardwareKeyboard.isShiftPressed,
+      modifierLockActive: _ctrlLocked || _altLocked,
+    );
+    if (!shouldPaste) return KeyEventResult.ignored;
+
+    // Only locked virtual modifiers need interception. Without a lock, keep
+    // xterm's default hardware paste behavior, including bracketed paste mode.
+    unawaited(_pasteClipboardText());
+    return KeyEventResult.handled;
   }
 
   @override
   Widget build(BuildContext context) {
-    final isButtonLocked = _countdown > 0;
+    super.build(context);
+    return WillPopScope(
+      onWillPop: () async {
+        clientClose(sessionId, _ffi);
+        return false; // Prevent default back behavior
+      },
+      child: buildBody(),
+    );
+  }
 
-    return AlertDialog(
-      content: ClipRRect(
-        borderRadius: BorderRadius.circular(20.0),
-        child: SingleChildScrollView(
-          child: Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topRight,
-                end: Alignment.bottomLeft,
-                colors: [
-                  Color(0xffe242bc),
-                  Color(0xfff4727c),
-                ],
+  Widget buildBody() {
+    final scaffold = Scaffold(
+      resizeToAvoidBottomInset: false, // Disable automatic layout adjustment; manually control UI updates to prevent flickering when the keyboard shows/hides
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: SafeArea(
+              top: true,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final heightPx = constraints.maxHeight;
+                  return _buildTerminalViewForPlatform(
+                    reportMouseInput: isWebDesktop || isAndroid,
+                    reportTouchInput: isIOS,
+                    terminal: _terminalModel.terminal,
+                    controller: _terminalModel.terminalController,
+                    textStyle: _getTerminalStyle(),
+                    // The following comment is from xterm.dart source code:
+                    // Workaround to detect delete key for platforms and IMEs that do not
+                    // emit a hardware delete event. Preferred on mobile platforms. [false] by
+                    // default.
+                    //
+                    // Android works fine without this workaround.
+                    deleteDetection: isIOS,
+                    shortcuts: platformTerminalShortcuts(),
+                    onKeyEvent: terminalCopyHandler(
+                      _terminalModel.terminal,
+                      _terminalModel.terminalController,
+                      fallback: _handleTerminalKeyEvent,
+                    ),
+                    padding: _calculatePadding(heightPx),
+                    onSecondaryTapDown: (details, offset) async {
+                      final selection = _terminalModel.terminalController.selection;
+                      if (selection != null) {
+                        final text = _terminalModel.terminal.buffer.getText(selection);
+                        _terminalModel.terminalController.clearSelection();
+                        await Clipboard.setData(ClipboardData(text: text));
+                      } else {
+                        await _pasteClipboardText();
+                      }
+                    },
+                  );
+                },
               ),
             ),
-            padding: EdgeInsets.all(25.0),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(
-                      Icons.warning_amber_sharp,
-                      color: Colors.white,
-                    ),
-                    SizedBox(width: 10),
-                    Text(
-                      translate("Warning"),
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 20.0,
-                      ),
-                    ),
-                  ],
+          ),
+          if (_showTerminalExtraKeys) _buildFloatingKeyboard(),
+          // iOS-style circular close button in top-right corner
+          if (isIOS) _buildCloseButton(),
+        ],
+      ),
+    );
+
+    // Add iOS edge swipe gesture to exit (similar to Android back button)
+    if (isIOS) {
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          final screenWidth = constraints.maxWidth;
+          // Base thresholds on screen width but clamp to reasonable logical pixel ranges
+          // Edge detection region: ~10% of width, clamped between 20 and 80 logical pixels
+          final edgeThreshold = (screenWidth * 0.1).clamp(20.0, 80.0);
+          // Required horizontal movement: ~25% of width, clamped between 80 and 300 logical pixels
+          final swipeThreshold = (screenWidth * 0.25).clamp(80.0, 300.0);
+
+          return RawGestureDetector(
+            behavior: HitTestBehavior.translucent,
+            gestures: <Type, GestureRecognizerFactory>{
+              HorizontalDragGestureRecognizer: GestureRecognizerFactoryWithHandlers<HorizontalDragGestureRecognizer>(
+                () => HorizontalDragGestureRecognizer(
+                  debugOwner: this,
+                  // Only respond to touch input, exclude mouse/trackpad
+                  supportedDevices: kTouchBasedDeviceKinds,
                 ),
-                SizedBox(height: 20),
-                Center(
-                  child: Image.asset(
-                    'assets/scam.png',
-                    width: 180,
-                  ),
-                ),
-                SizedBox(height: 18),
-                Text(
-                  translate("scam_title"),
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
+                (HorizontalDragGestureRecognizer instance) {
+                  instance
+                    // Capture initial touch-down position (before touch slop)
+                    ..onDown = (details) {
+                      _swipeStartX = details.localPosition.dx;
+                      _swipeCurrentX = details.localPosition.dx;
+                    }
+                    ..onUpdate = (details) {
+                      _swipeCurrentX = details.localPosition.dx;
+                    }
+                    ..onEnd = (details) {
+                      // Check if swipe started from left edge and moved right
+                      if (_swipeStartX < edgeThreshold && (_swipeCurrentX - _swipeStartX) > swipeThreshold) {
+                        clientClose(sessionId, _ffi);
+                      }
+                      _swipeStartX = 0;
+                      _swipeCurrentX = 0;
+                    }
+                    ..onCancel = () {
+                      _swipeStartX = 0;
+                      _swipeCurrentX = 0;
+                    };
+                },
+              ),
+            },
+            child: scaffold,
+          );
+        },
+      );
+    }
+
+    return scaffold;
+  }
+
+  Widget _buildCloseButton() {
+    return Positioned(
+      top: 0,
+      right: 0,
+      child: SafeArea(
+        minimum: const EdgeInsets.only(
+          top: 16, // iOS standard margin
+          right: 16, // iOS standard margin
+        ),
+        child: Semantics(
+          button: true,
+          label: translate('Close'),
+          child: Container(
+            width: 44, // iOS standard tap target size
+            height: 44,
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.5), // Half transparency
+              shape: BoxShape.circle,
+            ),
+            child: Material(
+              color: Colors.transparent,
+              shape: const CircleBorder(),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                customBorder: const CircleBorder(),
+                onTap: () {
+                  clientClose(sessionId, _ffi);
+                },
+                child: Tooltip(
+                  message: translate('Close'),
+                  child: const Icon(
+                    Icons.chevron_left, // iOS-style back arrow
                     color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 22.0,
+                    size: 28,
                   ),
                 ),
-                SizedBox(height: 18),
-                Text(
-                  "${translate("scam_text1")}\n\n${translate("scam_text2")}\n",
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16.0,
-                  ),
-                ),
-                Row(
-                  children: <Widget>[
-                    Checkbox(
-                      value: show_warning,
-                      onChanged: (value) {
-                        setState(() {
-                          show_warning = value!;
-                        });
-                      },
-                    ),
-                    Text(
-                      translate("Don't show again"),
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 15.0,
-                      ),
-                    ),
-                  ],
-                ),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    Container(
-                      constraints: BoxConstraints(maxWidth: 150),
-                      child: ElevatedButton(
-                        onPressed: isButtonLocked
-                            ? null
-                            : () {
-                                Navigator.of(context).pop();
-                                _serverModel.toggleService();
-                                if (show_warning) {
-                                  bind.mainSetLocalOption(
-                                      key: "show-scam-warning", value: "N");
-                                }
-                              },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.blueAccent,
-                        ),
-                        child: Text(
-                          isButtonLocked
-                              ? "${translate("I Agree")} (${_countdown}s)"
-                              : translate("I Agree"),
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 13.0,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ),
-                    SizedBox(width: 15),
-                    Container(
-                      constraints: BoxConstraints(maxWidth: 150),
-                      child: ElevatedButton(
-                        onPressed: () {
-                          Navigator.of(context).pop();
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.blueAccent,
-                        ),
-                        child: Text(
-                          translate("Decline"),
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 13.0,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+              ),
             ),
           ),
         ),
       ),
-      contentPadding: EdgeInsets.all(0.0),
     );
   }
-}
 
-class ServerInfo extends StatelessWidget {
-  final model = gFFI.serverModel;
-  final emptyController = TextEditingController(text: "-");
-
-  ServerInfo({Key? key}) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    final serverModel = Provider.of<ServerModel>(context);
-
-    const Color colorPositive = Colors.green;
-    const Color colorNegative = Colors.red;
-    const double iconMarginRight = 15;
-    const double iconSize = 24;
-    const TextStyle textStyleHeading = TextStyle(
-        fontSize: 16.0, fontWeight: FontWeight.bold, color: Colors.grey);
-    const TextStyle textStyleValue =
-        TextStyle(fontSize: 25.0, fontWeight: FontWeight.bold);
-
-    void copyToClipboard(String value) {
-      Clipboard.setData(ClipboardData(text: value));
-      showToast(translate('Copied'));
-    }
-
-    Widget ConnectionStateNotification() {
-      if (serverModel.connectStatus == -1) {
-        return Row(children: [
-          const Icon(Icons.warning_amber_sharp,
-                  color: colorNegative, size: iconSize)
-              .marginOnly(right: iconMarginRight),
-          Expanded(child: Text(translate('not_ready_status')))
-        ]);
-      } else if (serverModel.connectStatus == 0) {
-        return Row(children: [
-          SizedBox(width: 20, height: 20, child: CircularProgressIndicator())
-              .marginOnly(left: 4, right: iconMarginRight),
-          Expanded(child: Text(translate('connecting_status')))
-        ]);
-      } else {
-        return Row(children: [
-          const Icon(Icons.check, color: colorPositive, size: iconSize)
-              .marginOnly(right: iconMarginRight),
-          Expanded(child: Text(translate('Ready')))
-        ]);
-      }
-    }
-
-    final showOneTime = serverModel.approveMode != 'click' &&
-        serverModel.verificationMethod != kUsePermanentPassword;
-    return PaddingCard(
-        title: translate('Your Device'),
+  Widget _buildFloatingKeyboard() {
+    return AnimatedPositioned(
+      duration: const Duration(milliseconds: 200),
+      left: 0,
+      right: 0,
+      bottom: _sysKeyboardHeight,
+      child: Container(
+        key: _keyboardKey,
+        color: Theme.of(context).scaffoldBackgroundColor,
+        padding: EdgeInsets.zero,
         child: Column(
-          // ID
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Row(children: [
-              const Icon(Icons.perm_identity,
-                      color: Colors.grey, size: iconSize)
-                  .marginOnly(right: iconMarginRight),
-              Text(
-                translate('ID'),
-                style: textStyleHeading,
-              )
-            ]),
-            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-              Text(
-                model.serverId.value.text,
-                style: textStyleValue,
+            // Row 1 follows the latest reviewed PR layout.
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: _buildKeyboardKeyButtons(terminalKeyboardRow1Keys),
+            ),
+            // Row 2 ends with the full-width Row3 collapse/expand toggle.
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                ..._buildKeyboardKeyButtons(terminalKeyboardRow2Keys),
+                const SizedBox(width: terminalKeyboardKeySpacing),
+                _buildCollapseButton(),
+              ],
+            ),
+            // Row 3 restores paging keys and trailing alignment placeholders.
+            if (_row3Expanded)
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  ..._buildKeyboardKeyButtons(terminalKeyboardRow3Keys),
+                  for (var i = 0;
+                      i < terminalKeyboardRow3TrailingPlaceholderCount;
+                      i++) ...[
+                    const SizedBox(width: terminalKeyboardKeySpacing),
+                    const SizedBox(width: terminalKeyboardKeyWidth),
+                  ],
+                ],
               ),
-              IconButton(
-                  visualDensity: VisualDensity.compact,
-                  icon: Icon(Icons.copy_outlined),
-                  onPressed: () {
-                    copyToClipboard(model.serverId.value.text.trim());
-                  })
-            ]).marginOnly(left: 39, bottom: 10),
-            ConnectionStateNotification()
           ],
-        ));
-  }
-}
-
-class PermissionChecker extends StatefulWidget {
-  const PermissionChecker({Key? key}) : super(key: key);
-
-  @override
-  State<PermissionChecker> createState() => _PermissionCheckerState();
-}
-
-class _PermissionCheckerState extends State<PermissionChecker> {
-  @override
-  Widget build(BuildContext context) {
-    final serverModel = Provider.of<ServerModel>(context);
-    final hasAudioPermission = androidVersion >= 30;
-    final hideStopService = isAndroid &&
-        bind.mainGetBuildinOption(key: kOptionHideStopService) == 'Y';
-    final allowPermChangeInAcceptWindow = option2bool(
-        kOptionEnablePermChangeInAcceptWindow,
-        bind.mainGetBuildinOption(
-          key: kOptionEnablePermChangeInAcceptWindow,
-        ));
-    final permissionChangeLocked = isAndroid &&
-        serverModel.clients.any((c) => !c.disconnected) &&
-        !allowPermChangeInAcceptWindow;
-    return PaddingCard(
-        title: translate("Permissions"),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          serverModel.mediaOk && !hideStopService
-              ? ElevatedButton.icon(
-                      style: ButtonStyle(
-                          backgroundColor:
-                              MaterialStateProperty.all(Colors.red)),
-                      icon: const Icon(Icons.stop),
-                      onPressed: serverModel.toggleService,
-                      label: Text(translate("Stop service")))
-                  .marginOnly(bottom: 8)
-              : SizedBox.shrink(),
-          if (!hideStopService || !serverModel.mediaOk)
-            PermissionRow(
-                translate("Screen Capture"),
-                serverModel.mediaOk,
-                !serverModel.mediaOk &&
-                        gFFI.userModel.userName.value.isEmpty &&
-                        bind.mainGetLocalOption(key: "show-scam-warning") != "N"
-                    ? () => showScamWarning(context, serverModel)
-                    : serverModel.toggleService),
-          PermissionRow(
-            translate("Input Control"),
-            serverModel.inputOk,
-            serverModel.toggleInput,
-          ),
-          PermissionRow(
-            translate("Transfer file"),
-            serverModel.fileOk,
-            serverModel.toggleFile,
-            enabled: !permissionChangeLocked,
-          ),
-          hasAudioPermission
-              ? PermissionRow(translate("Audio Capture"), serverModel.audioOk,
-                  serverModel.toggleAudio,
-                  enabled: !permissionChangeLocked)
-              : Row(children: [
-                  Icon(Icons.info_outline).marginOnly(right: 15),
-                  Expanded(
-                      child: Text(
-                    translate("android_version_audio_tip"),
-                    style: const TextStyle(color: MyTheme.darkGray),
-                  ))
-                ]),
-          PermissionRow(
-            translate("Enable clipboard"),
-            serverModel.clipboardOk,
-            serverModel.toggleClipboard,
-            enabled: !permissionChangeLocked,
-          ),
-        ]));
-  }
-}
-
-class PermissionRow extends StatelessWidget {
-  const PermissionRow(this.name, this.isOk, this.onPressed,
-      {Key? key, this.enabled = true})
-      : super(key: key);
-
-  final String name;
-  final bool isOk;
-  final VoidCallback onPressed;
-  final bool enabled;
-
-  @override
-  Widget build(BuildContext context) {
-    return SwitchListTile(
-        visualDensity: VisualDensity.compact,
-        contentPadding: EdgeInsets.all(0),
-        title: Text(name),
-        value: isOk,
-        onChanged: enabled
-            ? (bool value) {
-                onPressed();
-              }
-            : null);
-  }
-}
-
-class ConnectionManager extends StatelessWidget {
-  const ConnectionManager({Key? key}) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    final serverModel = Provider.of<ServerModel>(context);
-    return Column(
-        children: serverModel.clients
-            .map((client) => PaddingCard(
-                title: translate(
-                    client.isFileTransfer ? "Transfer file" : "Share screen"),
-                titleIcon: client.isFileTransfer
-                    ? Icon(Icons.folder_outlined)
-                    : Icon(Icons.mobile_screen_share),
-                child: Column(children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(child: ClientInfo(client)),
-                      Expanded(
-                          flex: -1,
-                          child: client.isFileTransfer || !client.authorized
-                              ? const SizedBox.shrink()
-                              : IconButton(
-                                  onPressed: () {
-                                    gFFI.chatModel.changeCurrentKey(
-                                        MessageKey(client.peerId, client.id));
-                                    final bar = navigationBarKey.currentWidget;
-                                    if (bar != null) {
-                                      bar as BottomNavigationBar;
-                                      bar.onTap!(1);
-                                    }
-                                  },
-                                  icon: unreadTopRightBuilder(
-                                      client.unreadChatMessageCount)))
-                    ],
-                  ),
-                  client.authorized
-                      ? const SizedBox.shrink()
-                      : Text(
-                          translate("android_new_connection_tip"),
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ).marginOnly(bottom: 5),
-                  client.authorized
-                      ? _buildDisconnectButton(client)
-                      : _buildNewConnectionHint(serverModel, client),
-                  if (client.incomingVoiceCall && !client.inVoiceCall)
-                    ..._buildNewVoiceCallHint(context, serverModel, client),
-                ])))
-            .toList());
-  }
-
-  Widget _buildDisconnectButton(Client client) {
-    final disconnectButton = ElevatedButton.icon(
-      style: ButtonStyle(backgroundColor: MaterialStatePropertyAll(Colors.red)),
-      icon: const Icon(Icons.close),
-      onPressed: () {
-        bind.cmCloseConnection(connId: client.id);
-        gFFI.invokeMethod("cancel_notification", client.id);
-      },
-      label: Text(translate("Disconnect")),
-    );
-    final buttons = [disconnectButton];
-    if (client.inVoiceCall) {
-      buttons.insert(
-        0,
-        ElevatedButton.icon(
-          style: ButtonStyle(
-              backgroundColor: MaterialStatePropertyAll(Colors.red)),
-          icon: const Icon(Icons.phone),
-          label: Text(translate("Stop")),
-          onPressed: () {
-            bind.cmCloseVoiceCall(id: client.id);
-            gFFI.invokeMethod("cancel_notification", client.id);
-          },
         ),
-      );
-    }
-
-    if (buttons.length == 1) {
-      return Container(
-        alignment: Alignment.centerRight,
-        child: disconnectButton,
-      );
-    } else {
-      return Row(
-        children: buttons,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      );
-    }
+      ),
+    );
   }
 
-  Widget _buildNewConnectionHint(ServerModel serverModel, Client client) {
-    return Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-      TextButton(
-          child: Text(translate("Dismiss")),
-          onPressed: () {
-            serverModel.sendLoginResponse(client, false);
-          }).marginOnly(right: 15),
-      if (serverModel.approveMode != 'password')
-        ElevatedButton.icon(
-            icon: const Icon(Icons.check),
-            label: Text(translate("Accept")),
-            onPressed: () {
-              serverModel.sendLoginResponse(client, true);
-            }),
-    ]);
+  // Ctrl toggle button with highlighted locked state
+  Widget _buildCtrlKeyButton() {
+    return _buildModifierToggleButton(
+      text: 'Ctrl',
+      semanticsLabel: 'Ctrl',
+      isLocked: _ctrlLocked,
+      onPressed: () => setState(() => _ctrlLocked = !_ctrlLocked),
+    );
   }
 
-  List<Widget> _buildNewVoiceCallHint(
-      BuildContext context, ServerModel serverModel, Client client) {
+  // Alt toggle button with highlighted locked state
+  Widget _buildAltKeyButton() {
+    return _buildModifierToggleButton(
+      text: 'Alt',
+      semanticsLabel: 'Alt',
+      isLocked: _altLocked,
+      onPressed: () => setState(() => _altLocked = !_altLocked),
+    );
+  }
+
+  // Collapse/expand toggle button for Row3
+  void _toggleRow3Expanded() {
+    final willExpand = !_row3Expanded;
+    final shouldClearModifiers = shouldClearTerminalModifiersWhenRow3Collapses(
+      wasExpanded: _row3Expanded,
+      willExpand: willExpand,
+      ctrlLocked: _ctrlLocked,
+      altLocked: _altLocked,
+    );
+    setState(() {
+      _row3Expanded = willExpand;
+      if (shouldClearModifiers) {
+        _ctrlLocked = false;
+        _altLocked = false;
+      }
+    });
+    mainSetLocalBoolOption(kOptionShowTerminalCtrlKeys, willExpand);
+
+    // The floating keyboard height changes after Row3 is inserted/removed.
+    // Re-measure on the next frame so terminal padding uses the new height.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_showTerminalExtraKeys) return;
+      setState(() {
+        _updateKeyboardHeight();
+      });
+    });
+  }
+
+  Widget _buildCollapseButton() {
+    return Semantics(
+      label: translate('Show terminal extra keys'),
+      toggled: _row3Expanded,
+      child: ElevatedButton(
+        onPressed: _toggleRow3Expanded,
+        child: Text(_row3Expanded ? '∧' : '∨'),
+        style: ElevatedButton.styleFrom(
+          minimumSize: const Size(terminalKeyboardKeyWidth, 32),
+          padding: EdgeInsets.zero,
+          textStyle: const TextStyle(fontSize: 12),
+          backgroundColor:
+              Theme.of(context).colorScheme.surfaceContainerHighest,
+          foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+
+  /// Builds a fixed-width key sequence with the reviewed 2dp spacing.
+  List<Widget> _buildKeyboardKeyButtons(List<String> labels) {
     return [
-      Text(
-        translate("android_new_voice_call_tip"),
-        style: Theme.of(context).textTheme.bodyMedium,
-      ).marginOnly(bottom: 5),
-      Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-        TextButton(
-            child: Text(translate("Dismiss")),
-            onPressed: () {
-              serverModel.handleVoiceCall(client, false);
-            }).marginOnly(right: 15),
-        if (serverModel.approveMode != 'password')
-          ElevatedButton.icon(
-              icon: const Icon(Icons.check),
-              label: Text(translate("Accept")),
-              onPressed: () {
-                serverModel.handleVoiceCall(client, true);
-              }),
-      ])
+      for (var i = 0; i < labels.length; i++) ...[
+        _buildKeyButton(labels[i]),
+        if (i < labels.length - 1)
+          const SizedBox(width: terminalKeyboardKeySpacing),
+      ],
     ];
   }
-}
 
-class PaddingCard extends StatelessWidget {
-  const PaddingCard({Key? key, required this.child, this.title, this.titleIcon})
-      : super(key: key);
-
-  final String? title;
-  final Icon? titleIcon;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    final children = [child];
-    if (title != null) {
-      children.insert(
-          0,
-          Padding(
-              padding: const EdgeInsets.fromLTRB(0, 5, 0, 8),
-              child: Row(
-                children: [
-                  titleIcon?.marginOnly(right: 10) ?? const SizedBox.shrink(),
-                  Expanded(
-                    child: Text(title!,
-                        style: Theme.of(context)
-                            .textTheme
-                            .titleLarge
-                            ?.merge(TextStyle(fontWeight: FontWeight.bold))),
-                  )
-                ],
-              )));
-    }
-    return SizedBox(
-        width: double.maxFinite,
-        child: Card(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(13),
-          ),
-          margin: const EdgeInsets.fromLTRB(12.0, 10.0, 12.0, 0),
-          child: Padding(
-            padding:
-                const EdgeInsets.symmetric(vertical: 15.0, horizontal: 20.0),
-            child: Column(
-              children: children,
-            ),
-          ),
-        ));
-  }
-}
-
-class ClientInfo extends StatelessWidget {
-  final Client client;
-  ClientInfo(this.client);
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Column(children: [
-          Row(
-            children: [
-              Expanded(
-                  flex: -1,
-                  child: Padding(
-                      padding: const EdgeInsets.only(right: 12),
-                      child: _buildAvatar(context))),
-              Expanded(
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                    Text(client.name, style: const TextStyle(fontSize: 18)),
-                    const SizedBox(width: 8),
-                    Text(client.peerId, style: const TextStyle(fontSize: 10))
-                  ]))
-            ],
-          ),
-        ]));
-  }
-
-  Widget _buildAvatar(BuildContext context) {
-    final fallback = CircleAvatar(
-      backgroundColor: str2color(client.name,
-          Theme.of(context).brightness == Brightness.light ? 255 : 150),
-      child: Text(client.name.isNotEmpty ? client.name[0] : '?'),
+  /// Build a modifier toggle button (Ctrl/Alt) with one-shot behavior.
+  /// When [isLocked] is true, the button highlights in blue and the next
+  /// single-character input is mapped to its modified equivalent.
+  Widget _buildModifierToggleButton({
+    required String text,
+    required String semanticsLabel,
+    required bool isLocked,
+    required VoidCallback onPressed,
+  }) {
+    return Semantics(
+      // Ctrl and Alt are technical key names and intentionally stay unchanged.
+      label: semanticsLabel,
+      toggled: isLocked,
+      child: ElevatedButton(
+        onPressed: onPressed,
+        child: Text(text),
+        style: ElevatedButton.styleFrom(
+          minimumSize: const Size(terminalKeyboardKeyWidth, 32),
+          padding: EdgeInsets.zero,
+          textStyle: const TextStyle(fontSize: 12),
+          backgroundColor: isLocked
+              ? Colors.blue
+              : Theme.of(context).colorScheme.surfaceContainerHighest,
+          foregroundColor: isLocked
+              ? Colors.white
+              : Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+      ),
     );
-    return buildAvatarWidget(
-          avatar: client.avatar,
-          size: 40,
-          fallback: fallback,
-        ) ??
-        fallback;
   }
-}
 
-void androidChannelInit() {
-  gFFI.setMethodCallHandler((method, arguments) {
-    debugPrint("flutter got android msg,$method,$arguments");
-    try {
-      switch (method) {
-        case "start_capture":
-          {
-            gFFI.dialogManager.dismissAll();
-            gFFI.serverModel.updateClientState();
-            break;
-          }
-        case "on_state_changed":
-          {
-            var name = arguments["name"] as String;
-            var value = arguments["value"] as String == "true";
-            debugPrint("from jvm:on_state_changed,$name:$value");
-            gFFI.serverModel.changeStatue(name, value);
-            break;
-          }
-        case "on_android_permission_result":
-          {
-            var type = arguments["type"] as String;
-            var result = arguments["result"] as bool;
-            AndroidPermissionManager.complete(type, result);
-            break;
-          }
-        case "on_media_projection_canceled":
-          {
-            gFFI.serverModel.stopService();
-            break;
-          }
-        case "msgbox":
-          {
-            var type = arguments["type"] as String;
-            var title = arguments["title"] as String;
-            var text = arguments["text"] as String;
-            var link = (arguments["link"] ?? '') as String;
-            msgBox(gFFI.sessionId, type, title, text, link, gFFI.dialogManager);
-            break;
-          }
-        case "stop_service":
-          {
-            print(
-                "stop_service by kotlin, isStart:${gFFI.serverModel.isStart}");
-            if (gFFI.serverModel.isStart) {
-              gFFI.serverModel.stopService();
-            }
-            break;
-          }
-      }
-    } catch (e) {
-      debugPrintStack(label: "MethodCallHandler err:$e");
+  Widget _buildKeyButton(String label) {
+    if (label == 'Ctrl') return _buildCtrlKeyButton();
+    if (label == 'Alt') return _buildAltKeyButton();
+
+    return ElevatedButton(
+      onPressed: () {
+        _sendKeyToTerminal(label);
+      },
+      child: Text(label),
+      style: ElevatedButton.styleFrom(
+        minimumSize: const Size(terminalKeyboardKeyWidth, 32),
+        padding: EdgeInsets.zero,
+        textStyle: const TextStyle(fontSize: 12),
+        backgroundColor:
+            Theme.of(context).colorScheme.surfaceContainerHighest,
+        foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
+    );
+  }
+
+  void _sendKeyToTerminal(String key) {
+    String send;
+
+    switch (key) {
+      case 'Esc':
+        send = '\x1B';
+        break;
+      case 'Tab':
+        send = '\t';
+        break;
+      case 'Ctrl+C':
+        send = '\x03';
+        break;
+
+      case '↑':
+        send = '\x1B[A';
+        break;
+      case '↓':
+        send = '\x1B[B';
+        break;
+      case '→':
+        send = '\x1B[C';
+        break;
+      case '←':
+        send = '\x1B[D';
+        break;
+
+      case 'Home':
+        send = '\x1B[H';
+        break;
+      case 'End':
+        send = '\x1B[F';
+        break;
+      case 'PgUp':
+        send = '\x1B[5~';
+        break;
+      case 'PgDn':
+        send = '\x1B[6~';
+        break;
+
+      default:
+        send = key;
+        break;
     }
-    return "";
-  });
-}
 
-void showScamWarning(BuildContext context, ServerModel serverModel) {
-  showDialog(
-    context: context,
-    builder: (BuildContext context) {
-      return ScamWarningDialog(serverModel: serverModel);
-    },
-  );
+    _terminalModel.sendVirtualKey(send);
+  }
+
+  // https://github.com/TerminalStudio/xterm.dart/issues/42#issuecomment-877495472
+  // https://github.com/TerminalStudio/xterm.dart/issues/198#issuecomment-2526548458
+  TerminalStyle _getTerminalStyle() {
+    return isWeb
+        ? TerminalStyle(
+            fontFamily: _robotoMonoFontFamily,
+            fontSize: 14,
+          )
+        : const TerminalStyle();
+  }
+
+  @override
+  bool get wantKeepAlive => true;
 }
